@@ -1,0 +1,284 @@
+Insurance Customer Chatbot
+Refined Azure Solution Architecture — Reference Document
+Central US deployment assumption
+Purpose  Detailed working reference for architecture decisions, Azure components, security, document processing, Foundry agents, regional deployment and open decisions. Filter the content when preparing presentation slides.
+
+Status  Conceptual architecture, not a final deployment specification. Validate service availability, networking, security, regulatory obligations, quotas, pricing and non-functional requirements before implementation.
+
+Contents
+•	1. Architecture scope and client decisions
+•	2. Detailed solution architecture and end-to-end flows
+•	3. Azure components and responsibilities
+•	4. Security, identity and private networking
+•	5. Document processing, RAG and persistent memory
+•	6. Microsoft Foundry agent strategy
+•	7. Central US deployment considerations
+•	8. Remaining architecture decisions and assumptions
+•	9. Suggested presentation slide sequence
+
+ 1. Architecture Scope and Client Decisions
+The client is an insurance company introducing a chatbot into its existing customer portal. Customers can ask questions and upload PDF, DOCX and image files. Authenticated customers may retrieve personal policy, claim and payment information, subject to authorization.
+Client decision	Refined architecture implication
+Portal authentication: Existing	Reuse the portal's identity provider and login journey where technically suitable. Chat backend validates access tokens; avoid a second customer login unless required.
+Customer access: Both	Support anonymous public-information access and authenticated personal-service access, with separate permissions and data paths.
+Document sources: Both	Keep customer uploads separate from approved enterprise knowledge. Customer uploads must not become shared company knowledge automatically.
+Backend systems: Both	Integrate existing insurance systems through approved APIs; create new APIs/adapters where capabilities are missing.
+Network: Private	Use private connectivity for supported Azure services, private DNS and controlled egress. The customer portal may still be publicly reachable over HTTPS.
+Agent approach: Later	Start with one orchestrator and modular tools. Add specialist agents only when justified.
+Azure region: Central US	Target Central US, subject to model/service/SKU availability, private networking support, quota and data-residency approval.
+
+1.1 Architecture goals
+•	Integrate into the existing portal without disrupting its authentication experience.
+•	Support public FAQs and authenticated customer interactions with clear authorization boundaries.
+•	Accept PDFs, DOCX files and images through a secure upload pipeline.
+•	Ground answers in approved enterprise documents and customer-specific uploads.
+•	Connect to existing and new insurance APIs for policy, claims, finance/payment and support.
+•	Use Foundry for AI/agent capabilities while retaining application control of identity, authorization and business workflows.
+•	Apply private networking, workload identity, monitoring, governance and audit controls.
+•	Keep the design extensible for future specialist agents.
+2. Detailed Solution Architecture and End-to-End Flows
+The design separates the customer-facing edge, application/orchestration layer, AI agent layer, document and knowledge layer, enterprise systems, and cross-cutting security and operations.
+2.1 Logical component layers
+Layer	Representative components	Purpose
+Customer channel	Existing insurance portal, embedded chat UI, upload control	Customer interaction, session experience and file selection.
+Edge and API	Application Gateway WAF, API Management	HTTPS entry, WAF protection, API routing, token checks, throttling and policies.
+Application	Chat Backend on App Service or Container Apps; Azure Functions	Session handling, authorization, orchestration, file handling, adapters and business logic.
+AI platform	Microsoft Foundry project, model deployment, orchestrator, approved tools	Model inference, agent reasoning, tool selection, safety and traces.
+Knowledge/documents	Blob Storage, Document Intelligence, Azure AI Search / Foundry IQ	Secure storage, extraction, indexing, retrieval and grounded responses.
+State/secrets	Cosmos DB or approved database; Key Vault	Conversation state, consented preferences, metadata, secrets and certificates.
+Enterprise integration	Existing/new policy, claims, finance and CRM APIs; VPN/ExpressRoute if needed	Authoritative business data and controlled operations.
+Operations/governance	Azure Monitor, App Insights, Log Analytics, Sentinel, Azure Policy	Observability, audit, security monitoring, policy enforcement and governance.
+
+2.2 Typical chat request flow
+1.	A customer opens the existing portal and launches the chatbot.
+2.	For authenticated requests, the portal passes an appropriate customer access token. Anonymous requests receive only public capabilities.
+3.	The request reaches the HTTPS edge, proposed as Application Gateway WAF, which forwards it to the API layer.
+4.	API Management applies configured gateway policies such as token validation, throttling, request controls and routing.
+5.	The Chat Backend validates caller context and performs application-level authorization. It identifies anonymous versus authenticated mode and permitted policy, claim and document resources.
+6.	The backend invokes the Foundry orchestrator with only the minimum necessary context.
+7.	The agent uses approved knowledge retrieval or invokes a narrowly scoped business tool; it has no unrestricted database access.
+8.	The backend and connected APIs enforce authorization again at the resource/action boundary.
+9.	The response is checked, formatted and returned to the portal, with source references where appropriate.
+2.3 Typical document upload flow
+10.	The customer selects a PDF, DOCX or image in the portal. Anonymous uploads should be disabled or tightly restricted unless approved.
+11.	The backend validates extension, MIME type, file signature, size, page count and upload limits. Do not trust browser-supplied file metadata alone.
+12.	The file is stored in a quarantine area/container with customer, session, timestamp and correlation metadata.
+13.	A malware scanning control checks the file before downstream processing.
+14.	Document Intelligence extracts text, layout, tables and OCR. Image understanding beyond text extraction requires a suitable vision model and a defined use case.
+15.	Extracted content is normalized, classified, chunked and tagged with ownership, sensitivity, source, retention and access metadata.
+16.	Embeddings are generated using an approved embedding deployment and chunks are indexed in Azure AI Search or the selected retrieval service.
+17.	At query time, the backend verifies authorization and applies document ownership/permission filters before retrieving chunks.
+18.	The model receives only permitted content and generates a grounded response. Customer documents remain isolated from shared enterprise knowledge.
+2.4 Business-system interaction flow
+For policy, claims, billing or support questions, the agent calls approved backend tools. Examples include GetPolicySummary, GetClaimStatus and GetPaymentHistory. The API—not the model—must enforce customer access rights and validate each operation.
+System of record  Policy administration, claims management, billing and payment platforms remain authoritative. Foundry conversation state or model context must never be treated as the authoritative record of a policy, claim, payment or coverage decision.
+
+3. Azure Components and Responsibilities
+Azure component	Role in the solution	Design notes
+Application Gateway WAF	Customer-facing HTTPS edge, WAF inspection and routing.	Confirm whether it is needed alongside an existing CDN/WAF/edge service; tune WAF policy.
+API Management	API gateway, policies, throttling, routing and optional token validation.	Choose internal/external mode based on portal connectivity. Not a replacement for backend authorization.
+App Service or Container Apps	Hosts Chat Backend and application APIs.	Choose based on hosting standards, scaling, containers and network requirements.
+Azure Functions	Event-driven document processing, adapters and asynchronous tasks.	Use Managed Identity, retries, idempotency and private connectivity where supported.
+Microsoft Foundry	Model deployments, agents, tool calling, safety, tracing and evaluation capabilities.	Validate model, region, network mode, quotas and tool compatibility in Central US.
+Azure Blob Storage	Customer uploads, quarantined files and approved enterprise documents.	Separate containers/accounts or strong isolation boundaries; private endpoints and lifecycle policies.
+Azure AI Document Intelligence	Text, layout, table extraction and OCR.	Select model/API based on document types, languages, layouts and accuracy.
+Azure AI Search / Foundry IQ	Indexes and retrieves enterprise and customer-specific knowledge.	Apply security trimming/permission filters; validate feature and regional availability.
+Azure Cosmos DB / approved database	Conversation metadata/state and consented preferences.	Define retention, deletion, partitioning, backup and data-residency controls.
+Azure Key Vault	Secrets, certificates and keys.	Prefer Managed Identity; use private endpoint and private DNS where supported.
+Managed Identity	Workload authentication to supported Azure resources.	Use separate identities and least-privilege role assignments.
+Azure Monitor / App Insights	Metrics, traces, dependencies and diagnostics.	Use correlation IDs and redact sensitive data.
+Log Analytics	Central query and retention destination for configured logs.	Define retention, access, data collection and cost management.
+Microsoft Sentinel	SIEM/SOAR and security incident detection/response.	Connect security logs; not a substitute for application observability.
+VPN Gateway / ExpressRoute	Private hybrid connectivity to on-premises or connected networks.	Use if enterprise systems or dependencies require hybrid connectivity.
+Azure Firewall / NSGs / Private DNS	Traffic control, egress control and private name resolution.	Define routes, DNS forwarding, endpoint dependencies and allowed outbound destinations.
+
+3.1 Foundry versus surrounding Azure services
+Capability	Foundry contribution	Supporting Azure/application responsibility
+Models and agents	Model deployments and agent runtime/orchestration.	Portal-facing API, session handling and business authorization.
+Tools	Agent calls configured tools/functions and supported integrations.	Backend APIs implement business rules, permissions and audit.
+Knowledge/RAG	Agent can use configured retrieval capabilities where supported.	Storage, ingestion, extraction, indexing, document permissions and retention.
+Safety	Content safety and prompt-injection protections, subject to configuration/support.	Input validation, output policy, business constraints, approvals and API authorization.
+Observability/evaluation	Agent traces, evaluations and AI operational capabilities.	App Insights, Azure Monitor, Log Analytics and Sentinel for broader operations/security.
+Governance	Foundry resource/project access and AI-specific controls.	Entra ID, Azure RBAC, Azure Policy, Purview, classification and retention.
+
+4. Security, Identity and Private Networking
+4.1 Identity model
+Identity/control	Purpose	Important distinction
+Existing customer identity provider	Authenticates customers through portal sign-in.	Must issue suitable tokens for chatbot API and support required scopes/claims.
+Microsoft Entra ID	Workforce/admin identity, Azure administration and workload identity foundation.	Customer CIAM may be separate; employee access policies may not apply to customers.
+Managed Identity	Azure workloads authenticate to Azure services without embedded credentials.	Service-to-service identity, not customer login or network connectivity.
+Foundry agent identity	Identity for agent-to-resource/tool access where supported.	Least privilege; does not replace customer authorization.
+Application authorization	Checks customer-to-policy, customer-to-claim and customer-to-document relationships.	Trusted backend/API logic must enforce it for every sensitive request.
+Conditional Access / MFA	Identity access policies where supported and licensed.	Confirm applicability to the existing customer identity provider and journey.
+
+4.2 Anonymous versus authenticated capabilities
+Capability	Anonymous visitor	Authenticated customer
+Public FAQs and general product information	Allowed	Allowed
+General claims process information	Allowed	Allowed
+Personal policy details	Not allowed	Only after resource-level authorization
+Personal claim status	Not allowed	Only after resource-level authorization
+Payment/billing details	Not allowed	Only after resource-level authorization
+Personal document upload	Normally disabled or tightly restricted	Allowed subject to validation, scanning and ownership controls
+Persistent personal memory	Avoid; short-lived session only	Only if consented, necessary and governed by retention/deletion policy
+
+4.3 Private network design
+•	Use a VNet with dedicated subnets for application integration, private endpoints and network/security services as required.
+•	Use private endpoints for supported PaaS resources such as Storage, Key Vault, Cosmos DB and Azure AI Search when required and supported.
+•	Use Private DNS zones and DNS links/forwarding so private endpoint names resolve to private IP addresses from connected networks.
+•	Use VNet Integration or the applicable networking mechanism for outbound access from App Service/Functions; confirm hosting-plan constraints.
+•	Use NSGs and Azure Firewall where required to restrict east-west and outbound traffic; define permitted destinations.
+•	Configure Foundry Agent Service networking using a supported mode and validate inbound, outbound, tool and file-workflow constraints.
+•	Use VPN Gateway or ExpressRoute for on-premises connectivity when required; coordinate routing, DNS and firewall rules.
+•	A Private Endpoint primarily provides private inbound access to the target service; it does not automatically privatize every outbound dependency.
+4.4 Additional security controls
+•	Use TLS in transit and encryption at rest; evaluate customer-managed keys if required.
+•	Use Managed Identity and least-privilege RBAC rather than embedded credentials wherever possible.
+•	Store unavoidable secrets/certificates in Key Vault and rotate them.
+•	Validate file type, signature, size and content; scan uploads and quarantine failures.
+•	Treat prompts and retrieved documents as untrusted input; mitigate prompt injection and data exfiltration.
+•	Do not log access tokens, OTPs, full customer documents, payment credentials or unnecessary personal data.
+•	Apply rate limits, abuse detection, bot controls and upload throttles to anonymous entry points.
+•	Use explicit confirmation and approval workflows for sensitive changes and transactions.
+5. Document Processing, RAG and Persistent Memory
+5.1 Two knowledge domains
+Domain	Examples	Access model
+Customer-upload domain	Claim forms, bills, receipts, supporting PDFs, DOCX and images.	Private to customer/case or explicitly authorized parties; store ownership and case metadata; filter every retrieval.
+Enterprise knowledge domain	Approved policy wording, product brochures, public FAQs, internal procedures and support guidance.	Access depends on audience, product, jurisdiction, role and classification; preserve source permissions.
+
+5.2 Recommended ingestion pipeline
+19.	Receive file through portal and backend API.
+20.	Validate extension, MIME type, magic bytes/signature, size, page count and permitted formats.
+21.	Store in quarantine and assign document ID and correlation ID.
+22.	Run malware scanning; reject or isolate suspicious files.
+23.	Extract text, tables, layout and OCR using Document Intelligence.
+24.	Normalize content, classify sensitivity and attach metadata.
+25.	Chunk content according to document structure and retrieval needs.
+26.	Generate embeddings using a selected embedding model/deployment.
+27.	Index chunks and metadata in Azure AI Search or chosen knowledge service.
+28.	At query time, enforce identity, document ownership, business context and source permissions before retrieval.
+29.	Return grounded responses with source references where appropriate.
+5.3 Image handling
+•	If an image contains text (for example, a scanned bill), OCR/document extraction is the primary path.
+•	If visual interpretation is required (for example, damage photographs), select and validate a vision-capable model and define what it may infer.
+•	Do not let a vision model make binding claim-adjudication decisions; route consequential assessments to approved claims workflows and human review.
+5.4 Persistent memory design
+Memory type	What it contains	Recommended treatment
+Conversation/session state	Recent turns, thread context and workflow state.	Use supported Foundry thread state or application-managed state; set expiry and access controls.
+Long-term preferences	Language or communication preferences.	Store only if necessary and consented; provide retention and deletion mechanisms.
+Enterprise knowledge	Approved policy wording, product documents and FAQs.	Store in knowledge/search system with versioning and source permissions.
+Business transaction data	Policy, claim, payment and coverage information.	Retrieve from authoritative business APIs; never use LLM memory as the record.
+
+Privacy principle  Memory must never bypass authorization. Re-authenticate and re-authorize sensitive data access when required by session and token policy.
+
+6. Microsoft Foundry Agent Strategy
+6.1 Initial release: one orchestrator
+Start with one orchestrator agent. It classifies intent, selects an approved knowledge source or tool, passes minimum necessary context and prepares a response. The backend remains responsible for identity, authorization, validation and audit.
+Initial capability/tool	Example operations	Controls
+Public knowledge retrieval	Search FAQs, public product information and public process documents.	Only approved public corpus; no customer-specific retrieval.
+Policy API tool	Get policy summary, coverage reference or document metadata.	Authenticated customer; backend checks ownership and scope.
+Claims API tool	Get claim status, required documents or milestones.	Customer/case authorization; no model claim approval/rejection.
+Finance/billing API tool	Get payment status, premium due date or invoice summary.	Strong authorization; mask sensitive data; no unapproved payment execution.
+Support/CRM API tool	Create/retrieve support case where approved.	Validate fields, idempotency and consent; audit actions.
+Document retrieval tool	Retrieve customer-upload or enterprise chunks.	Separate domains or strict permission filters; never trust model-selected customer IDs.
+
+6.2 Future specialist agents
+Future agent	Possible responsibility
+Policy Agent	Policy explanations, product/coverage information and policy-document retrieval.
+Claims Agent	Claim status, required-document guidance and claim workflow navigation.
+Finance Agent	Premium, invoice, payment status and billing queries.
+Support Agent	Customer service requests, case creation and support knowledge.
+
+Introduce specialist agents only when there is a clear benefit in capability isolation, independent lifecycle, team ownership, tool permissions or evaluation. More agents add orchestration complexity, latency, cost and security boundaries.
+6.3 Agent safety and governance
+•	Define an allow-list of tools and operations for each agent.
+•	Use strict input schemas and validate tool arguments in trusted backend code.
+•	Enforce authorization in APIs, not in prompts or model reasoning.
+•	Use prompt-injection protections and treat retrieved documents as untrusted data.
+•	Ground insurance answers in approved sources and return citations/references where possible.
+•	Require human approval for consequential or regulated actions.
+•	Evaluate answer quality, groundedness, refusal behaviour, safety, latency and cost.
+•	Version prompts, tools, model deployments and agent configurations; promote changes through dev/test/prod controls.
+6.4 Model selection considerations
+Do not finalize a model based only on its name. Run a representative evaluation set and confirm model availability in Central US for the required deployment type and quota.
+•	Primary conversational model: capable instruction-following model meeting quality, latency, privacy and cost targets.
+•	Lower-cost model: smaller model for classification, routing or simple FAQ tasks if evaluation supports it.
+•	Vision model: only if image understanding beyond OCR is required; validate supported inputs and deployment availability.
+•	Embedding model: select based on retrieval quality, dimensions, language coverage and search compatibility.
+•	Document Intelligence: use for OCR, layout and structured extraction rather than expecting a chat model to do every extraction task.
+7. Central US Deployment Considerations
+The current target deployment region is Central US. Validate every required service, SKU, model deployment and networking feature in that region before resource creation.
+7.1 Regional design principles
+•	Prefer Central US for Foundry, application hosting, storage, search, document processing and state services when the required capability and SKU are available.
+•	Keep latency-sensitive application and data-plane resources in the same region where practical.
+•	Validate model catalog availability, deployment type, quota, throughput and safety feature support in Central US.
+•	Validate private endpoint, VNet integration, Managed Identity and service-specific networking support for every resource.
+•	Identify services that must be deployed elsewhere and assess latency, data transfer, residency and failure dependencies.
+•	Define a secondary region for disaster recovery only after RTO/RPO, residency and service availability are known.
+•	Confirm where prompts, uploads, extracted text, embeddings, traces, logs, backups and support data are stored and processed.
+7.2 Data residency and regulatory confirmation
+Client confirmation required  A Central US application deployment does not by itself prove that every data artifact is stored or processed only in Central US. Confirm contractual, regulatory and internal requirements for customer documents, prompts, model processing, indexes, telemetry, backups and DR copies.
+
+7.3 Deployment environments
+Environment	Purpose	Typical controls
+Development	Feature development and integration tests.	Synthetic/masked data; restricted access; isolated resources and quotas.
+Test / Pre-production	End-to-end, security, performance and user acceptance testing.	Production-like network and identity; controlled test data; release approval.
+Production	Customer-facing service.	Private networking, hardened access, monitoring, backup/DR, approved model/prompt versions and change control.
+
+8. Remaining Architecture Decisions and Assumptions
+8.1 Open decisions
+Priority	Decision / question	Suggested starting point
+Critical	Where is the existing portal hosted?	Keep portal in place; design connectivity from its hosting environment.
+Critical	Which identity provider is used, and can it issue OAuth/OIDC tokens for the chatbot API?	Reuse existing identity; confirm issuer, audience, scopes, claims, lifetime and refresh.
+Critical	How will the portal reach the private API entry point?	Evaluate public WAF edge to internal APIM or private connectivity from portal hosting network.
+Critical	Where are policy, claims, finance and CRM systems hosted?	Use private connectivity; VPN/ExpressRoute if on-premises or connected network.
+Critical	Is Central US a strict data residency requirement or preferred hosting region?	Written confirmation covering prompts, documents, embeddings, logs, backups and DR.
+High	What actions may the chatbot perform?	Start read-only; add writes through explicit confirmation and approval-controlled APIs.
+High	What document types, sizes, languages and page counts are permitted?	Define allow-lists and limits; test representative samples.
+High	What are retention and deletion rules for uploads and conversation history?	Agree with legal, security and records-management stakeholders.
+High	How are customer and enterprise document permissions represented?	Customer/case ownership metadata and source ACLs; retrieval-time enforcement.
+High	Which business APIs exist and which must be built?	Inventory operations, auth, ownership checks, limits and audit.
+High	What are user volumes, concurrency, file volume and response-time targets?	Use for capacity estimates and service-tier selection.
+Medium	What availability, RTO and RPO are required?	Define targets before backup, zone and cross-region DR design.
+Medium	What model quality, latency and cost thresholds apply?	Build representative insurance evaluation set and compare deployments.
+Medium	What monitoring, SIEM, audit and retention standards apply?	Agree log sources, retention, redaction and incident ownership.
+
+8.2 Assumptions
+•	The existing portal remains the customer entry point and is not replaced.
+•	The existing identity provider can be integrated, subject to token/API compatibility checks.
+•	Anonymous access is limited to public information and does not expose personal records.
+•	Authenticated access still requires resource-level ownership and authorization.
+•	Customer uploads and enterprise documents are logically separated and permission-filtered.
+•	Existing and new backend systems expose or will expose controlled APIs; agents do not connect directly to production databases.
+•	The first release uses one orchestrator with modular tools; specialist agents are a later option.
+•	Central US is the target region, subject to feature availability and client data-residency approval.
+•	Private networking is required for supported backend and data services; portal access remains HTTPS-based.
+8.3 Key risks and mitigations
+Risk	Why it matters	Mitigation
+Cross-customer document leakage	Retrieval filter failure could expose another customer's content.	Separate storage/index boundaries where appropriate; backend authorization; negative-access tests.
+Prompt injection in uploads	Document may contain instructions intended to manipulate the model.	Treat documents as untrusted; prompt-injection controls, source isolation and tool allow-lists.
+Unauthorized business actions	Agent may attempt an operation outside customer entitlement.	API authorization, strict schemas, confirmation, approvals and audit.
+Incorrect coverage/claim advice	Model response may be mistaken for binding insurance decision.	Ground answers, state limitations and route binding decisions to authoritative systems/humans.
+Regional feature mismatch	Model, SKU or private networking may not be available in Central US.	Verify region matrices and quotas before deployment; validate fallback.
+Sensitive data in logs	Prompts, documents or tokens may enter telemetry.	Redaction, minimization, access restrictions and retention controls.
+Private connectivity gaps	Private endpoints alone do not solve DNS, outbound or hybrid routing.	Create service-by-service network matrix and test end-to-end.
+
+9. Suggested Presentation Slide Sequence
+Slide	Title	Recommended content
+1	Architecture Scope & Client Decisions	Business objective, requirements and seven agreed client decisions.
+2	Proposed Azure Solution Architecture	Main diagram showing customer, edge, application, Foundry, data and enterprise boundaries.
+3	Azure Components & Responsibilities	Service-to-responsibility mapping and why each component is needed.
+4	Security, Identity & Private Networking	Existing identity, anonymous/authenticated split, Managed Identity, WAF, APIM, VNet, private endpoints, DNS and hybrid connectivity.
+5	Document Processing & RAG Architecture	Upload and enterprise document pipelines, OCR, scanning, chunking, embeddings, indexing and permission-aware retrieval.
+6	Microsoft Foundry Agent Strategy	Initial orchestrator, approved tools, guardrails, evaluation and future specialist-agent roadmap.
+7	Central US Deployment Considerations & Open Decisions	Region validation, data residency, DR, assumptions, dependencies and client questions.
+
+Presentation guidance
+•	Use the detailed architecture diagram as the centerpiece; explain the request path from portal through backend, Foundry, retrieval/business APIs and response.
+•	Explain why each Azure service exists rather than listing services without context.
+•	Use a separate slide for document ingestion because uploads and RAG are major requirements.
+•	Distinguish Foundry-native capabilities from surrounding Azure platform services.
+•	Show anonymous and authenticated flows separately so the security boundary is clear.
+•	Mark specialist agents as a future phase, not a first-release requirement.
+•	Present unresolved items as open decisions, not confirmed client requirements.
+Final architecture recommendation  Proceed with a portal-integrated chatbot, trusted application backend, one initial Foundry orchestrator, permission-aware RAG, separate customer and enterprise document domains, API-based access to authoritative insurance systems, and private networking for supported services. Finalize region, identity, network entry, data residency, API inventory, retention and non-functional requirements before producing the implementation-level deployment design.
+
